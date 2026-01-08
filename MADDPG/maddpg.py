@@ -2,7 +2,7 @@ import torch
 import torch.nn.functional as F
 import numpy as np
 
-from actor import Actor
+from MADDPG.actor import Actor
 from critic import Critic
 from replay_buffer import ReplayBuffer
 from utils import soft_update
@@ -116,7 +116,7 @@ class MADDPG:
             self.actor_opts[i].zero_grad()
             actor_loss.backward()
             self.actor_opts[i].step()
-            
+
         for i in range(self.n_agents):
             soft_update(self.target_actors[i], self.actors[i], self.tau)
             soft_update(self.target_critics[i], self.critics[i], self.tau)
