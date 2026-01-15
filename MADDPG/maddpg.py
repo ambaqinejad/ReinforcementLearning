@@ -120,3 +120,17 @@ class MADDPG:
         for i in range(self.n_agents):
             soft_update(self.target_actors[i], self.actors[i], self.tau)
             soft_update(self.target_critics[i], self.critics[i], self.tau)
+
+    def save(self, path):
+        data = {
+            "actors": [a.state_dict() for a in self.actors],
+            "critics": [c.state_dict() for c in self.critics]
+        }
+        torch.save(data, path)
+
+    def load(self, path):
+        data = torch.load(path, map_location=self.device)
+
+        for i in range(self.n_agents):
+            self.actors[i].load_state_dict(data["actors"][i])
+            self.critics[i].load_state_dict(data["critics"][i])

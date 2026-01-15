@@ -56,7 +56,7 @@ class MultiAgentQuadEnv(gym.Env):
         # ----------------------------
         urdf_path = os.path.join(
             os.path.dirname(__file__),
-            "quadrotor.urdf"
+            "../quadrotor.urdf"
         )
 
         self.quads = []
@@ -208,7 +208,7 @@ class MultiAgentQuadEnv(gym.Env):
             obs.extend((self.goal_pos - pos).tolist())
             obs.extend(pos.tolist())
             obs.extend(self._get_nearest_obstacles(pos, k=2))
-            obs.extend(self._get_nearest_agents(i, pos, k=1))
+            obs.extend(self._get_nearest_agents(i, pos, k=2))
 
             obs_all.append(obs)
 
@@ -289,6 +289,9 @@ class MultiAgentQuadEnv(gym.Env):
     # Render (FPV style)
     # ======================================================
     def render(self):
+        if not self.render_mode:
+            return
+        p.stepSimulation()
         pos = self._get_agent_pos(0)
         cam_pos = pos + np.array([0, 0, 0.3])
         cam_target = cam_pos + np.array([1, 0, 0])
@@ -302,99 +305,99 @@ class MultiAgentQuadEnv(gym.Env):
 
 
 
-# =========================================================
-# TRAINING (slow moving goal)
-# =========================================================
-env = DynamicQuadFPVEnv(render=True, num_obs=5)
-TRAIN = True
-if TRAIN:
-    env.goal_speed_scale = 0.0
-    env.goal_radius = 0.3
-
-    model = SAC(
-        "MlpPolicy",
-        env,
-        learning_rate=3e-4,
-        buffer_size=150000,
-        batch_size=256,
-        gamma=0.99,
-        tau=0.005,
-        ent_coef="auto",  # 🔑 controlled entropy
-        verbose=1
-    )
-
-    model.learn(total_timesteps=40000)
-    model.save("sac_quad_static_goal")
-
-    # ===== Phase 2: Slow Moving Goal =====
-    env.goal_speed_scale = 0.002
-
-    model = SAC.load("sac_quad_static_goal", env)
-    model.learn(total_timesteps=30_000)
-    model.save("sac_quad_slow_goal")
-
-    # ===== Phase 3: Fast Moving Goal =====
-    env.goal_speed_scale = 0.02
-
-    model = SAC.load("sac_quad_slow_goal", env)
-    model.learn(total_timesteps=40_000)
-    model.save("sac_quad_fpvsim")
-
-    print("-------------------------------------------------")
-    model.save("sac_quad_static_goal")
-else:
-    env.goal_speed_scale = 0.02
-    env.goal_radius = 0.5
-    model = SAC.load("sac_quad_fpvsim", env)
-# =========================================================
-# TESTING (faster moving goal)
-# =========================================================
-
-
-env.goal_speed_scale = 0.02
-model = SAC.load("sac_quad_fpvsim", env)
-
-obs, _ = env.reset()
-for _ in range(2000):
-    action, _ = model.predict(obs, deterministic=True)
-    obs, reward, done, _, _ = env.step(action)
-    env.render()
-    if done:
-        break
-
-cv2.destroyAllWindows()
-# =========================================================
-# PLOTS (Path & Reward)
-# =========================================================
-trail = np.array(env.trail)
-
-plt.figure(figsize=(10, 4))
-
-# ---- Top-down trajectory ----
-plt.subplot(1, 2, 1)
-if len(trail) > 0:
-    plt.plot(trail[:, 0], trail[:, 1], "-y", label="Drone Path")
-
-plt.scatter(env.goal_pos[0], env.goal_pos[1],
-            c="g", s=60, marker="*", label="Final Goal Position")
-
-plt.scatter([p[0] for p in env.obs_positions],
-            [p[1] for p in env.obs_positions],
-            c="r", s=40, label="Obstacles")
-
-plt.xlabel("X")
-plt.ylabel("Y")
-plt.title("Top-Down View (Trajectory)")
-plt.legend()
-plt.grid()
-
-# ---- Reward curve ----
-plt.subplot(1, 2, 2)
-plt.plot(env.reward_history, "-b")
-plt.xlabel("Step")
-plt.ylabel("Reward")
-plt.title("Reward Over Time")
-plt.grid()
-
-plt.tight_layout()
-plt.show()
+# # =========================================================
+# # TRAINING (slow moving goal)
+# # =========================================================
+# env = DynamicQuadFPVEnv(render=True, num_obs=5)
+# TRAIN = True
+# if TRAIN:
+#     env.goal_speed_scale = 0.0
+#     env.goal_radius = 0.3
+#
+#     model = SAC(
+#         "MlpPolicy",
+#         env,
+#         learning_rate=3e-4,
+#         buffer_size=150000,
+#         batch_size=256,
+#         gamma=0.99,
+#         tau=0.005,
+#         ent_coef="auto",  # 🔑 controlled entropy
+#         verbose=1
+#     )
+#
+#     model.learn(total_timesteps=40000)
+#     model.save("sac_quad_static_goal")
+#
+#     # ===== Phase 2: Slow Moving Goal =====
+#     env.goal_speed_scale = 0.002
+#
+#     model = SAC.load("sac_quad_static_goal", env)
+#     model.learn(total_timesteps=30_000)
+#     model.save("sac_quad_slow_goal")
+#
+#     # ===== Phase 3: Fast Moving Goal =====
+#     env.goal_speed_scale = 0.02
+#
+#     model = SAC.load("sac_quad_slow_goal", env)
+#     model.learn(total_timesteps=40_000)
+#     model.save("sac_quad_fpvsim")
+#
+#     print("-------------------------------------------------")
+#     model.save("sac_quad_static_goal")
+# else:
+#     env.goal_speed_scale = 0.02
+#     env.goal_radius = 0.5
+#     model = SAC.load("sac_quad_fpvsim", env)
+# # =========================================================
+# # TESTING (faster moving goal)
+# # =========================================================
+#
+#
+# env.goal_speed_scale = 0.02
+# model = SAC.load("sac_quad_fpvsim", env)
+#
+# obs, _ = env.reset()
+# for _ in range(2000):
+#     action, _ = model.predict(obs, deterministic=True)
+#     obs, reward, done, _, _ = env.step(action)
+#     env.render()
+#     if done:
+#         break
+#
+# cv2.destroyAllWindows()
+# # =========================================================
+# # PLOTS (Path & Reward)
+# # =========================================================
+# trail = np.array(env.trail)
+#
+# plt.figure(figsize=(10, 4))
+#
+# # ---- Top-down trajectory ----
+# plt.subplot(1, 2, 1)
+# if len(trail) > 0:
+#     plt.plot(trail[:, 0], trail[:, 1], "-y", label="Drone Path")
+#
+# plt.scatter(env.goal_pos[0], env.goal_pos[1],
+#             c="g", s=60, marker="*", label="Final Goal Position")
+#
+# plt.scatter([p[0] for p in env.obs_positions],
+#             [p[1] for p in env.obs_positions],
+#             c="r", s=40, label="Obstacles")
+#
+# plt.xlabel("X")
+# plt.ylabel("Y")
+# plt.title("Top-Down View (Trajectory)")
+# plt.legend()
+# plt.grid()
+#
+# # ---- Reward curve ----
+# plt.subplot(1, 2, 2)
+# plt.plot(env.reward_history, "-b")
+# plt.xlabel("Step")
+# plt.ylabel("Reward")
+# plt.title("Reward Over Time")
+# plt.grid()
+#
+# plt.tight_layout()
+# plt.show()

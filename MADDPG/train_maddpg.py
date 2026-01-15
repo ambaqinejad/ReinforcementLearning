@@ -4,6 +4,9 @@ import torch
 from maddpg_marl import MultiAgentQuadEnv
 from maddpg import MADDPG
 
+import os
+os.makedirs("models", exist_ok=True)
+
 # ======================================================
 # Hyperparameters (عمداً واضح و قابل تنظیم)
 # ======================================================
@@ -25,6 +28,10 @@ NOISE_END = 0.05
 NOISE_DECAY = 0.9995
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+
+RENDER_TRAIN = True
+RENDER_EVERY = 50      # هر 50 اپیزود
+RENDER_STEPS = 200    # حداکثر چند step نمایش داده شود
 
 # ======================================================
 # Environment
@@ -61,49 +68,45 @@ noise = NOISE_START
 episode_rewards = []
 
 for episode in range(MAX_EPISODES):
+
+    render_episode = RENDER_TRAIN and (episode % RENDER_EVERY == 0)
+
     obs, _ = env.reset()
     state = env.get_state()
 
     total_reward = np.zeros(N_AGENTS)
 
     for step in range(MAX_STEPS):
-        # --------------------------------------------------
-        # 1. Select actions (Decentralized + Exploration)
-        # --------------------------------------------------
+
         actions = maddpg.select_actions(obs, noise=noise)
 
-        # --------------------------------------------------
-        # 2. Environment step
-        # --------------------------------------------------
         next_obs, rewards, terminated, truncated, _ = env.step(actions)
         next_state = env.get_state()
 
         done = terminated or truncated
 
-        # --------------------------------------------------
-        # 3. Store transition
-        # --------------------------------------------------
         maddpg.replay_buffer.push(
-            state,
-            obs,
-            actions,
-            rewards,
-            next_state,
-            next_obs,
-            done
+            state, obs, actions, rewards,
+            next_state, next_obs, done
         )
 
-        # --------------------------------------------------
-        # 4. Learning step
-        # --------------------------------------------------
         maddpg.update()
 
         obs = next_obs
         state = next_state
         total_reward += rewards
 
+        # -------------------------------
+        # Render (فقط بعضی اپیزودها)
+        # -------------------------------
+        if render_episode and step < RENDER_STEPS:
+            env.render()
+
         if done:
             break
+    if episode % 100 == 0:
+        maddpg.save(f"models/maddpg_ep{episode}.pth")
+
 
     # ------------------------------------------------------
     # Noise decay (خیلی مهم)
@@ -122,4 +125,5 @@ for episode in range(MAX_EPISODES):
             f"Noise: {noise:.3f}"
         )
 
+maddpg.save("models/maddpg_final.pth")
 print("Training finished.")
