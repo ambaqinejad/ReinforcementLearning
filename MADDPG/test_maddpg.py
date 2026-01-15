@@ -1,7 +1,7 @@
 import numpy as np
 import torch
 
-from maddpg_marl import MultiAgentQuadEnv
+from maddpg_env import MultiAgentQuadEnv
 from maddpg import MADDPG
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
@@ -27,14 +27,15 @@ maddpg = MADDPG(
 
 maddpg.load("models/maddpg_final.pth")
 
-obs, _ = env.reset()
-state = env.get_state()
+while True:
+    obs, _ = env.reset()
+    state = env.get_state()
 
-for step in range(500):
-    actions = maddpg.select_actions(obs, noise=0.0)  # بدون نویز
-    obs, rewards, terminated, truncated, _ = env.step(actions)
+    for step in range(500):
+        actions = maddpg.select_actions(obs, noise=0.0)  # بدون نویز
+        obs, rewards, terminated, truncated, _ = env.step(actions)
 
-    env.render()
+        env.render()
 
-    if terminated or truncated:
-        break
+        if terminated or truncated:
+            break

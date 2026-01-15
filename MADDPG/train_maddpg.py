@@ -1,7 +1,7 @@
 import numpy as np
 import torch
 
-from maddpg_marl import MultiAgentQuadEnv
+from maddpg_env import MultiAgentQuadEnv
 from maddpg import MADDPG
 
 import os
