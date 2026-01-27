@@ -34,7 +34,7 @@ while True:
     for step in range(500):
         actions = maddpg.select_actions(obs, noise=0.0)  # بدون نویز
         obs, rewards, terminated, truncated, _ = env.step(actions)
-
+        print(rewards)
         env.render()
 
         if terminated or truncated:
