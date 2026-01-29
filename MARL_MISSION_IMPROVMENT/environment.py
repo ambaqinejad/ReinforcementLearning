@@ -152,7 +152,7 @@ class MultiAgentQuadEnv(gym.Env):
             self,
             render=True,
             roles=None,
-            max_steps=500,
+            max_steps=300,
             n_scout=4,
             n_surround=4,
             n_attacker=1,
@@ -179,9 +179,9 @@ class MultiAgentQuadEnv(gym.Env):
         self.dt = 0.1
         self.action_scale = 0.1
 
-        self.arena_x = [-5.0, 5.0]
-        self.arena_y = [-5.0, 5.0]
-        self.arena_z = [0.5, 5.0]
+        self.arena_x = [-7.0, 7.0]
+        self.arena_y = [-7.0, 7.0]
+        self.arena_z = [0.5, 7.0]
 
         # PyBullet setup
         if self.render_mode:
@@ -193,7 +193,7 @@ class MultiAgentQuadEnv(gym.Env):
             p.connect(p.DIRECT)
         p.setAdditionalSearchPath(pybullet_data.getDataPath())
         p.resetSimulation()
-        p.loadURDF("plane.urdf")
+        p.loadURDF("samurai.urdf")
 
         # ---------------------------------------------
 
@@ -210,7 +210,7 @@ class MultiAgentQuadEnv(gym.Env):
         self.agent_manager.create_agents(roles=self.not_goal_roles)
 
         # Target (evader)
-        self.goal_uid = p.loadURDF("cube_small.urdf", [3.0, 0.0, 1.5])
+        self.goal_uid = p.loadURDF("cube_small.urdf", [3.0, 0.0, 1.5], globalScaling=3)
         p.changeVisualShape(self.goal_uid, -1, rgbaColor=[0, 1, 0, 1])
 
         # Spaces
@@ -264,6 +264,8 @@ class MultiAgentQuadEnv(gym.Env):
     def scout_handler(self, actions, scout_agents):
         scout_rewards = np.zeros(len(scout_agents))
         terminated = False
+
+        # calculate new position of agents
         for i, agent in enumerate(scout_agents):
             act = np.clip(actions[i], -1, 1) * self.action_scale
             pos, _ = p.getBasePositionAndOrientation(agent.uid)
@@ -275,29 +277,52 @@ class MultiAgentQuadEnv(gym.Env):
         # check scout near to goal
         is_near = [False] * len(scout_agents)
         dists_to_goal = [0.0] * len(scout_agents)
-        # dists_to_other_scout_agents = np.array([
-        #     np.linalg.norm(self._get_pos(pid) - ev_new)
-        #     for pid in self.pursuers
-        # ])
+        min_dists_to_other_scout_agents = [0.0] * len(scout_agents)
+
+        # minimum distance each agent to other agents
+        for i, scout1 in enumerate(scout_agents):
+            pos1 = np.array(p.getBasePositionAndOrientation(scout1.uid)[0])
+            ds = np.array([
+                np.abs(
+                    np.linalg.norm(
+                    pos1 - np.array(p.getBasePositionAndOrientation(scout2.uid)[0])
+                ))
+                for scout2 in scout_agents
+                if scout1.uid != scout2.uid
+            ])
+            min_dists_to_other_scout_agents[i] = np.min(ds)
+
+        for i, dist in enumerate(min_dists_to_other_scout_agents):
+            if dist < .7:
+                scout_rewards[i] -= 10
+
         for i, agent in enumerate(scout_agents):
             agent_pos, _ = p.getBasePositionAndOrientation(agent.uid)
             goal_pos, _ = p.getBasePositionAndOrientation(self.goal_uid)
-            dist_to_goal = np.linalg.norm(agent_pos - goal_pos)
+            dist_to_goal = np.linalg.norm(np.array(agent_pos) - np.array(goal_pos))
             dists_to_goal[i] = dist_to_goal
             scout_rewards[i] -= dist_to_goal
-            if np.abs(dist_to_goal) < 5:
-                if np.abs(dist_to_goal) <= 3:
-                    scout_rewards[i] -= dist_to_goal * 1.7
+            if np.abs(dist_to_goal) < 1.5:
+                if np.abs(dist_to_goal) <= .5:
+                    scout_rewards[i] -= dist_to_goal * 3
                 else:
                     is_near[i] = True
+                    scout_rewards[i] += 20.0
+                    if min_dists_to_other_scout_agents[i] > 1.5:
+                        scout_rewards[i] -= min_dists_to_other_scout_agents[i]
                     for _agent in scout_agents:
+                        length = len(_agent.messages)
                         _agent.messages = [float(True), float(False), 0.0]
                         _agent.messages.extend(goal_pos)
+                        length = length - len(_agent.messages)
+                        _agent.messages.extend([0]*length)
 
+        call_surrounder = False
         if all(is_near):
             scout_rewards[:] += 100
             terminated = True
-        return scout_rewards, terminated
+            call_surrounder = True
+        return scout_rewards, terminated, call_surrounder, dists_to_goal
 
 
     def step(self, actions):
@@ -324,8 +349,11 @@ class MultiAgentQuadEnv(gym.Env):
         p.resetBasePositionAndOrientation(self.goal_uid, ev_new, [0, 0, 0, 1])
 
         # ---- Move pursuers ----
-        rewards, terminated = self.scout_handler(actions, scout_agents)
-        rewards.extend()
+        rewards, terminated, call_surrounder, dists_to_goal = self.scout_handler(actions, scout_agents)
+        rewards = np.concatenate([
+            rewards,
+            np.array([0, 0, 0, 0, 0, np.mean(dists_to_goal)])
+        ])
 
 
         #
@@ -359,7 +387,7 @@ class MultiAgentQuadEnv(gym.Env):
         time.sleep(0.01 if self.render_mode else 0.0)
         rewards /= 10.0
 
-        return self._get_obs(), rewards, terminated, truncated, {}
+        return self.get_obs(), rewards, terminated, truncated, {}
 
     # --------------------------------------------------
     # Observation

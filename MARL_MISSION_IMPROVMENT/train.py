@@ -21,6 +21,10 @@ N_SURROUND = 4
 N_ATTACKER = 1
 N_GOAL = 1
 
+RENDER_TRAIN = True
+RENDER_EVERY = 50
+RENDER_STEPS = 200
+
 roles = [ROLE_SCOUT for _ in range(N_SCOUT)]
 roles.extend([ROLE_SURROUND for _ in range(N_SURROUND)])
 roles.extend([ROLE_ATTACKER for _ in range(N_ATTACKER)])
@@ -88,56 +92,53 @@ maddpg = MADDPG(
 noise = NOISE_START
 
 for episode in range(MAX_EPISODES):
+    print(f"EPISODE={episode}")
 
-    render_episode = episode % 50 == 0
+    render_episode = RENDER_TRAIN and (episode % RENDER_EVERY == 0)
     obs, _ = env.reset()
     state = env.get_state()
 
     episode_reward = np.zeros(N_AGENTS)
 
     for step in range(MAX_STEPS):
-        obs, _ = env.reset()
-        state = env.get_state()
+        # print(f"STEP={step}")
 
-        episode_reward = np.zeros(N_AGENTS)
         stop_surrounder = True
         stop_attacker = True
 
-        for step in range(MAX_STEPS):
+        actions = maddpg.select_actions(
+            obs,
+            noise_pursuer=noise,
+            noise_evader=noise * 0.5,
+            stop_surrounder=stop_surrounder, stop_attacker=stop_attacker
+        )
 
-            actions = maddpg.select_actions(
-                obs,
-                noise_pursuer=noise,
-                noise_evader=noise * 0.5,
-                stop_surrounder=stop_surrounder, stop_attacker=stop_attacker
-            )
+        next_obs, rewards, terminated, truncated, _ = env.step(actions)
+        next_state = env.get_state()
 
-            next_obs, rewards, terminated, truncated, _ = env.step(actions)
-            next_state = env.get_state()
+        done = terminated or truncated
 
-            done = terminated or truncated
+        maddpg.replay_buffer.push(
+            state,
+            obs,
+            actions,
+            rewards,
+            next_state,
+            next_obs,
+            done
+        )
 
-            maddpg.replay_buffer.push(
-                state,
-                obs,
-                actions,
-                rewards,
-                next_state,
-                next_obs,
-                done
-            )
+        maddpg.update()
 
-            maddpg.update()
+        obs = next_obs
+        state = next_state
+        episode_reward += rewards
 
-            obs = next_obs
-            state = next_state
-            episode_reward += rewards
+        if render_episode and step < RENDER_STEPS:
+            env.render()
 
-            if render_episode and step < RENDER_STEPS:
-                env.render()
-
-            if done:
-                break
+        if done:
+            break
 
     # ---------------- Noise decay ----------------
     noise = max(NOISE_END, noise * NOISE_DECAY)
@@ -147,7 +148,7 @@ for episode in range(MAX_EPISODES):
         print(f"Ep {episode:04d} | Reward: {episode_reward} | Noise: {noise:.3f}")
 
     # ---------------- Checkpoint ----------------
-    if episode % 100 == 0:
+    if episode % 50 == 0:
         maddpg.save(f"models/maddpg_attention_ep{episode}.pth")
 
 # ======================================================

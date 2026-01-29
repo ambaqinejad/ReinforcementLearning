@@ -51,8 +51,12 @@ class MADDPG:
         # Actors
         # ==================================================
         self.actors = []
+        self.critics = []
         self.target_actors = []
+        self.target_critics = []
+
         self.actor_opts = []
+        self.critic_opts = []
 
         for _ in range(n_agents):
             actor = Actor(
@@ -60,33 +64,35 @@ class MADDPG:
                 action_dim=action_dim
             ).to(device)
 
+            critic = Critic(
+                state_dim,
+                self.n_agents * action_dim
+            ).to(device)
+
             target_actor = Actor(
                 obs_dim=obs_dim,
                 action_dim=action_dim
             ).to(device)
 
+            target_critic = Critic(
+                state_dim,
+                self.n_agents * action_dim
+            ).to(device)
+
             target_actor.load_state_dict(actor.state_dict())
+            target_critic.load_state_dict(critic.state_dict())
 
             self.actors.append(actor)
+            self.critics.append(critic)
             self.target_actors.append(target_actor)
+            self.target_critics.append(target_critic)
 
-            self.actor_opts.append(torch.optim.Adam(actor.parameters(), lr=lr_actor))
-
-        # ==================================================
-        # Critic
-        # ==================================================
-        self.critic = Critic(
-            state_dim=state_dim,
-            action_dim_total=self.n_agents * action_dim
-        ).to(device)
-
-        self.target_critic = Critic(
-            state_dim=state_dim,
-            action_dim_total=self.n_agents * action_dim
-        ).to(device)
-
-        self.target_critic.load_state_dict(self.critic.state_dict())
-        self.critic_opt = torch.optim.Adam(self.critic.parameters(), lr=lr_critic)
+            self.actor_opts.append(
+                torch.optim.Adam(actor.parameters(), lr=lr_actor)
+            )
+            self.critic_opts.append(
+                torch.optim.Adam(critic.parameters(), lr=lr_critic)
+            )
 
         # ==================================================
         # Replay Buffer
@@ -129,125 +135,87 @@ class MADDPG:
         if len(self.replay_buffer) < self.batch_size:
             return
 
-        (
-            state,
-            obs,
-            actions,
-            messages,
-            rewards,
-            next_state,
-            next_obs,
-            done
-        ) = self.replay_buffer.sample(self.batch_size)
+        state, obs, actions, rewards, next_state, next_obs, done = \
+            self.replay_buffer.sample(self.batch_size)
 
-        # ---------------- Tensors ----------------
-        state = torch.tensor(state, dtype=torch.float32, device=self.device)
-        next_state = torch.tensor(next_state, dtype=torch.float32, device=self.device)
-
-        obs = torch.tensor(obs, dtype=torch.float32, device=self.device)
-        next_obs = torch.tensor(next_obs, dtype=torch.float32, device=self.device)
-
-        actions = torch.tensor(actions, dtype=torch.float32, device=self.device)
-        messages = torch.tensor(messages, dtype=torch.float32, device=self.device)
-
-        rewards = torch.tensor(rewards, dtype=torch.float32, device=self.device)
-        done = torch.tensor(done, dtype=torch.float32, device=self.device)
+        state = torch.tensor(state, dtype=torch.float32).to(self.device)
+        actions = torch.tensor(actions, dtype=torch.float32).to(self.device)
+        rewards = torch.tensor(rewards, dtype=torch.float32).to(self.device)
+        next_state = torch.tensor(next_state, dtype=torch.float32).to(self.device)
+        done = torch.tensor(done, dtype=torch.float32).to(self.device)
 
         # ==================================================
-        # Target actions & messages
+        # Target actions
         # ==================================================
         next_actions = []
-        next_messages = []
-
-        zero_messages = torch.zeros(
-            (self.batch_size, self.n_agents, MESSAGE_DIM),
-            device=self.device
-        )
-
         for i in range(self.n_agents):
-            a, m = self.target_actors[i](
+            o = torch.tensor(
                 next_obs[:, i, :],
-                self.roles[i].repeat(self.batch_size),
-                zero_messages
-            )
-            next_actions.append(a)
-            next_messages.append(m)
+                dtype=torch.float32
+            ).to(self.device)
+            next_actions.append(self.target_actors[i](o))
 
-        next_actions = torch.stack(next_actions, dim=1)
-        next_messages = torch.stack(next_messages, dim=1)
+        next_actions = torch.cat(next_actions, dim=1)
 
         # ==================================================
-        # Critic update
-        # ==================================================
-        with torch.no_grad():
-            target_q = self.target_critic(next_state, next_actions, next_messages)
-            y = rewards.mean(dim=1, keepdim=True) + self.gamma * (1 - done) * target_q
-
-        current_q = self.critic(state, actions, messages)
-        critic_loss = F.mse_loss(current_q, y)
-
-        self.critic_opt.zero_grad()
-        critic_loss.backward()
-        self.critic_opt.step()
-
-        # ==================================================
-        # Actor update
+        # Update critics
         # ==================================================
         for i in range(self.n_agents):
-            cur_actions = []
-            cur_messages = []
+            with torch.no_grad():
+                target_q = self.target_critics[i](
+                    next_state,
+                    next_actions
+                )
+                y = rewards[:, i:i + 1] + self.gamma * (1 - done) * target_q
 
-            zero_messages = torch.zeros(
-                (self.batch_size, self.n_agents, MESSAGE_DIM), device=self.device
+            current_q = self.critics[i](
+                state,
+                actions.view(self.batch_size, -1)
             )
+
+            critic_loss = F.mse_loss(current_q, y)
+
+            self.critic_opts[i].zero_grad()
+            critic_loss.backward()
+            self.critic_opts[i].step()
+
+        # ==================================================
+        # Update actors
+        # ==================================================
+        for i in range(self.n_agents):
+            current_actions = []
 
             for j in range(self.n_agents):
+                o = torch.tensor(
+                    obs[:, j, :],
+                    dtype=torch.float32
+                ).to(self.device)
+
                 if j == i:
-                    a, m = self.actors[j](obs[:, j, :], self.roles[j].repeat(self.batch_size), zero_messages)
+                    current_actions.append(self.actors[j](o))
                 else:
-                    with torch.no_grad():
-                        a, m = self.actors[j](obs[:, j, :], self.roles[j].repeat(self.batch_size), zero_messages)
+                    current_actions.append(self.actors[j](o).detach())
 
-                cur_actions.append(a)
-                cur_messages.append(m)
+            current_actions = torch.cat(current_actions, dim=1)
 
-            cur_actions = torch.stack(cur_actions, dim=1)
-            cur_messages = torch.stack(cur_messages, dim=1)
-
-            actor_loss = -self.critic(state, cur_actions, cur_messages).mean()
+            actor_loss = -self.critics[i](
+                state,
+                current_actions
+            ).mean()
 
             self.actor_opts[i].zero_grad()
             actor_loss.backward()
             self.actor_opts[i].step()
 
-        # ==================================================
-        # Soft update
-        # ==================================================
-        for i in range(self.n_agents):
-            soft_update(self.target_actors[i], self.actors[i], self.tau)
-
-        soft_update(self.target_critic, self.critic, self.tau)
-
     def save(self, path):
-        checkpoint = {
-            "actors": [actor.state_dict() for actor in self.actors],
-            "target_actors": [actor.state_dict() for actor in self.target_actors],
-            "critic": self.critic.state_dict(),
-            "target_critic": self.target_critic.state_dict(),
-            "actor_opts": [opt.state_dict() for opt in self.actor_opts],
-            "critic_opt": self.critic_opt.state_dict(),
-        }
-        torch.save(checkpoint, path)
+        torch.save({
+            "actors": [a.state_dict() for a in self.actors],
+            "critics": [c.state_dict() for c in self.critics]
+        }, path)
 
     def load(self, path):
-        checkpoint = torch.load(path, map_location=self.device)
-
+        data = torch.load(path, map_location=self.device)
         for i in range(self.n_agents):
-            self.actors[i].load_state_dict(checkpoint["actors"][i])
-            self.target_actors[i].load_state_dict(checkpoint["target_actors"][i])
-            self.actor_opts[i].load_state_dict(checkpoint["actor_opts"][i])
-
-        self.critic.load_state_dict(checkpoint["critic"])
-        self.target_critic.load_state_dict(checkpoint["target_critic"])
-        self.critic_opt.load_state_dict(checkpoint["critic_opt"])
+            self.actors[i].load_state_dict(data["actors"][i])
+            self.critics[i].load_state_dict(data["critics"][i])
 
